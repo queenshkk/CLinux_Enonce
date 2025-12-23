@@ -3,6 +3,14 @@
 #include <QMessageBox>
 #include "dialogmodification.h"
 #include <unistd.h>
+#include <sys/types.h>
+#include <sys/ipc.h>
+#include <sys/msg.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/shm.h>
+#include <signal.h>
+
 
 extern WindowClient *w;
 
@@ -11,6 +19,10 @@ extern WindowClient *w;
 int idQ, idShm;
 #define TIME_OUT 120
 int timeOut = TIME_OUT;
+char * pShm;
+TAB_CONNEXIONS* tab;
+struct sigaction sa;
+static int log=0;
 
 void handlerSIGUSR1(int sig);
 
@@ -20,20 +32,68 @@ void handlerSIGUSR1(int sig);
 WindowClient::WindowClient(QWidget *parent):QMainWindow(parent),ui(new Ui::WindowClient)
 {
     ui->setupUi(this);
+    w=this;
     ::close(2);
     logoutOK();
+
+    MESSAGE m;
+
 
     // Recuperation de l'identifiant de la file de messages
     fprintf(stderr,"(CLIENT %d) Recuperation de l'id de la file de messages\n",getpid());
 
-    // Recuperation de l'identifiant de la mémoire partagée
-    fprintf(stderr,"(CLIENT %d) Recuperation de l'id de la mémoire partagée\n",getpid());
+    idQ=msgget(CLE, 0);
+    if(idQ==-1){
+      perror("Erreur msgget (Client)\n");
+      exit(1);
+    }
 
-    // Attachement à la mémoire partagée
+    printf("idQ : %d\n", idQ);
+
+
+    // Recuperation de l'identifiant de la mémoire partagée
+    /*fprintf(stderr,"(CLIENT %d) Recuperation de l'id de la mémoire partagée\n",getpid());
+
+    idShm=shmget(CLE, sizeof(TAB_CONNEXIONS), 0);
+    if(idShm==-1){
+      perror("Erreur shmget (Client)\n");
+      exit(1);
+    }
+
+    printf("idShm : %d\n", idShm);
+
+    // Attachement à la mémoire partagée (la file)
+    tab=(TAB_CONNEXIONS*) shmat(idShm, NULL, 0);
+    if(tab==(void*)-1){
+      perror("Erreur shmat (Client)\n");
+      exit(1);
+    }
+    
+ }*/
 
     // Armement des signaux
+    sa.sa_handler=handlerSIGUSR1;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags=0;
+
+    if(sigaction(SIGUSR1, &sa, nullptr)==-1){
+      perror("Erreur sigaction (Client)\n");
+      exit(1);
+    }
 
     // Envoi d'une requete de connexion au serveur
+    fprintf(stderr,"Envoi requête connect (Client)\n");
+
+    m.type=1;
+    m.expediteur=getpid(); 
+    m.requete=CONNECT;
+
+    if(msgsnd(idQ,&m,sizeof(MESSAGE)-sizeof(long), 0)==-1){ 
+      perror("Erreur de msgsnd connect (Client)");
+      exit(1);
+    }
+
+
 }
 
 WindowClient::~WindowClient()
@@ -330,6 +390,35 @@ void WindowClient::closeEvent(QCloseEvent *event)
 {
     // TO DO
 
+    MESSAGE m;
+    if(log){
+
+      m.type=1;
+      m.expediteur=getpid();
+      m.requete=LOGOUT;
+
+      fprintf(stderr,"Envoi requête logout (Client)\n");
+
+      if(msgsnd(idQ,&m,sizeof(MESSAGE)-sizeof(long), 0)==-1){ 
+        perror("Erreur de msgsnd logout (Client)\n");
+        exit(1);
+      }
+
+      log=0;
+
+    }
+
+    m.type=1; 
+    m.expediteur=getpid(); 
+    m.requete=DECONNECT; 
+
+    fprintf(stderr,"Envoi requête deconnect (Client)\n");
+
+    if(msgsnd(idQ,&m,sizeof(MESSAGE)-sizeof(long), 0)==-1){ 
+      perror("Erreur msgsnd deconnect (Client)");
+      exit(1);
+    }
+
     QApplication::exit();
 }
 
@@ -339,12 +428,54 @@ void WindowClient::closeEvent(QCloseEvent *event)
 void WindowClient::on_pushButtonLogin_clicked()
 {
     // TO DO
+  MESSAGE m;
+
+  m.type=1;
+  m.expediteur=getpid();
+  m.requete=LOGIN;
+
+  if(isNouveauChecked()){
+    strcpy(m.data1, "1");
+  }else{
+    strcpy(m.data1, "0");
+  }
+
+
+  strcpy(m.data2, getNom());
+  strcpy(m.texte, getMotDePasse());
+
+
+  fprintf(stderr,"Envoie requête login (Client)\n");
+
+  if(msgsnd(idQ,&m,sizeof(MESSAGE)-sizeof(long), 0)==-1){ 
+      perror("Erreur de msgsnd login (Client)\n");
+      exit(1);
+  }
+
 
 }
 
 void WindowClient::on_pushButtonLogout_clicked()
 {
     // TO DO
+    if(!log) return;
+
+
+    MESSAGE m;
+    m.type=1;
+    m.expediteur=getpid();
+    m.requete=LOGOUT;
+
+    fprintf(stderr,"Envoie requête logout (Client)\n");
+
+    if(msgsnd(idQ,&m,sizeof(MESSAGE)-sizeof(long), 0)==-1){ 
+        perror("Erreur de msgsnd logout(Client)\n");
+        exit(1);
+    }
+
+    log=0;
+
+    
     logoutOK();
 }
 
@@ -470,9 +601,14 @@ void WindowClient::on_checkBox5_clicked(bool checked)
 void handlerSIGUSR1(int sig)
 {
     MESSAGE m;
-    
+    int i;
+    const char *nom;
+    int deja=0;
+
+
     // ...msgrcv(idQ,&m,...)
-    
+    while(msgrcv(idQ, &m, sizeof(MESSAGE)-sizeof(long),getpid(), IPC_NOWAIT)!=-1){
+  
       switch(m.requete)
       {
         case LOGIN :
@@ -482,16 +618,52 @@ void handlerSIGUSR1(int sig)
                       w->loginOK();
                       w->dialogueMessage("Login...",m.texte);
                       // ...
+                      log=1;
                     }
-                    else w->dialogueErreur("Login...",m.texte);
+                    else{
+                      fprintf(stderr,"(CLIENT %d) Login KO\n",getpid());
+                      w->dialogueErreur("Login...",m.texte);
+                      w->logoutOK();
+                      log=0;
+
+                    } 
                     break;
 
         case ADD_USER :
                     // TO DO
+
+                    for(i=1; i<=5; i++){
+                      nom=w->getPersonneConnectee(i);
+                      if(nom!=NULL && strcmp(nom, m.data1)==0){
+                        deja=1;
+                        break;
+                      }
+                    }
+
+                    if(!deja){
+                      for(i=1; i<=5; i++){
+                        nom=w->getPersonneConnectee(i);
+                        if(nom==NULL || strlen(nom)==0){
+                          w->setPersonneConnectee(i, m.data1);
+                          break;
+                        }
+                      }
+                    }
+                   
+
+
                     break;
 
         case REMOVE_USER :
                     // TO DO
+
+                    for(i=1; i<=5; i++){
+                        nom=w->getPersonneConnectee(i);
+                        if(nom==NULL || strcmp(nom, m.data1)==0){
+                          w->setPersonneConnectee(i, "");
+                          break;
+                        }
+                      }
                     break;
 
         case SEND :
@@ -501,5 +673,9 @@ void handlerSIGUSR1(int sig)
         case CONSULT :
                   // TO DO
                   break;
-      }
+    }
+
+  }
 }
+
+

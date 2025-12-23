@@ -14,17 +14,22 @@
 #include <mysql.h>
 #include <setjmp.h>
 #include "protocole.h" // contient la cle et la structure d'un message
+#include "FichierUtilisateur.h"
 
 int idQ,idShm,idSem;
 TAB_CONNEXIONS *tab;
 
 void afficheTab();
+int Login(MESSAGE *m);
 
 MYSQL* connexion;
+void HandlerSIGINT(int sig);
 
 
 int main()
 {
+  struct sigaction A; 
+
   // Connection à la BD
   connexion = mysql_init(NULL);
   if (mysql_real_connect(connexion,"localhost","Student","PassStudent1_","PourStudent",0,0,0) == NULL)
@@ -34,6 +39,15 @@ int main()
   }
 
   // Armement des signaux
+  A.sa_handler=HandlerSIGINT;
+  A.sa_flags=0;
+  sigemptyset(&A.sa_mask); 
+
+  if(sigaction(SIGINT, &A, NULL)==-1){
+    perror("Erreur sigaction (Serveur)\n");
+    exit(1);
+  }
+
 
   // Creation des ressources
   fprintf(stderr,"(SERVEUR %d) Creation de la file de messages\n",getpid());
@@ -71,9 +85,19 @@ int main()
   MYSQL_ROW  tuple;
   PUBLICITE pub;
 
+
+  int fd = open(FICHIER_UTILISATEURS, O_CREAT | O_RDWR, 0666);
+  if (fd == -1)
+  {
+      perror("Erreur creation utilisateurs.dat");
+      exit(1);
+  }
+  close(fd);
+
   while(1)
   {
   	fprintf(stderr,"(SERVEUR %d) Attente d'une requete...\n",getpid());
+    
     if (msgrcv(idQ,&m,sizeof(MESSAGE)-sizeof(long),1,0) == -1)
     {
       perror("(SERVEUR) Erreur de msgrcv");
@@ -81,22 +105,140 @@ int main()
       exit(1);
     }
 
+    printf("Requête : %d\n", m.requete);
     switch(m.requete)
     {
       case CONNECT :  
                       fprintf(stderr,"(SERVEUR %d) Requete CONNECT reçue de %d\n",getpid(),m.expediteur);
+
+                      for(i=0; i<6; i++){ 
+                        if(tab->connexions[i].pidFenetre==0){
+                          tab->connexions[i].pidFenetre=m.expediteur; 
+                          break; 
+                        }
+                        
+                      }
                       break; 
 
       case DECONNECT :  
                       fprintf(stderr,"(SERVEUR %d) Requete DECONNECT reçue de %d\n",getpid(),m.expediteur);
+
+                       for(i=0; i<6; i++){ //
+                        if(tab->connexions[i].pidFenetre==m.expediteur){
+                          tab->connexions[i].pidFenetre=0; 
+                          break; 
+                        }
+                      }
+
                       break; 
 
       case LOGIN :  
                       fprintf(stderr,"(SERVEUR %d) Requete LOGIN reçue de %d : --%s--%s--%s--\n",getpid(),m.expediteur,m.data1,m.data2,m.texte);
+                      int ok;
+                      
+                      ok=Login(&m);
+
+                      if(ok){
+                        for(i=0; i<6; i++){
+                          if(tab->connexions[i].pidFenetre!=0 && tab->connexions[i].pidFenetre!=m.expediteur
+                             && tab->connexions[i].nom[0]!='\0'){
+                            MESSAGE autres;
+                            autres.type=tab->connexions[i].pidFenetre;
+                            autres.expediteur=getpid();
+                            autres.requete=ADD_USER;
+                            strcpy(autres.data1, m.data2);
+
+
+                            if(msgsnd(idQ, &autres, sizeof(MESSAGE)-sizeof(long), 0)==-1){
+                              perror("Erreur msgsnd (Serveur)");
+                              exit(1);
+                            }
+
+                            kill(tab->connexions[i].pidFenetre, SIGUSR1);
+                          }
+                        }
+
+
+                        for(i=0; i<6; i++){
+                          if(tab->connexions[i].pidFenetre!=0 && tab->connexions[i].pidFenetre!=m.expediteur
+                            && tab->connexions[i].nom[0]!='\0'){
+                              MESSAGE autres;
+                              autres.type=m.expediteur;
+                              autres.expediteur=getpid();
+                              autres.requete=ADD_USER;
+                              strcpy(autres.data1, tab->connexions[i].nom);
+
+
+                              if(msgsnd(idQ, &autres, sizeof(MESSAGE)-sizeof(long), 0)==-1){
+                                perror("Erreur msgsnd (Serveur)");
+                                exit(1);
+                              }
+
+                              kill(m.expediteur, SIGUSR1);
+                            }
+                        }
+
+                      }
+    
+                      reponse.type=m.expediteur;
+                      reponse.expediteur=getpid();
+                      reponse.requete=LOGIN;
+                      if (ok){
+                        strcpy(reponse.data1, "OK");
+                      }
+                      else{
+                        strcpy(reponse.data1, "KO");
+                      }
+
+                      strcpy(reponse.texte, m.texte);
+
+                      if(msgsnd(idQ,&reponse, sizeof(MESSAGE)-sizeof(long), 0)==-1){ 
+                        perror("Erreur de msgsnd login (Serveur)");
+                        exit(1);
+                      }
+
+                      kill(m.expediteur, SIGUSR1);
+
+                      
                       break; 
 
       case LOGOUT :  
                       fprintf(stderr,"(SERVEUR %d) Requete LOGOUT reçue de %d\n",getpid(),m.expediteur);
+                      
+                      char nom[50];
+
+                      for(i=0; i<6; i++){
+                        if(tab->connexions[i].pidFenetre==m.expediteur){
+                          strcpy(nom, tab->connexions[i].nom);
+
+                          strcpy(tab->connexions[i].nom, "");
+                          for(j=0; j<5; j++){
+                            tab->connexions[i].autres[j]=0;
+                          }
+                          tab->connexions[i].pidModification=0;
+                          break;
+                        }
+                      }
+
+                      for(i=0;i<6; i++){
+                        if(tab->connexions[i].pidFenetre<=0){
+                          continue;
+                        }
+                        
+                        MESSAGE rep;
+                        rep.type=tab->connexions[i].pidFenetre;
+                        rep.expediteur=getpid();
+                        rep.requete=REMOVE_USER;
+
+                        strcpy(rep.data1, nom);
+
+                        if(msgsnd(idQ, &rep, sizeof(MESSAGE)-sizeof(long), 0)==-1){
+                          perror("Erreur msgsnd remove user (Serveur)\n");
+                          exit(1);
+                        }
+
+                        kill(tab->connexions[i].pidFenetre, SIGUSR1);
+                      }
                       break;
 
       case ACCEPT_USER :
@@ -169,3 +311,80 @@ void afficheTab()
   fprintf(stderr,"\n");
 }
 
+void HandlerSIGINT(int sig){
+
+  if(idQ!=-1){
+     if(msgctl(idQ, IPC_RMID, NULL)==-1){ 
+      perror("Erreur msgctl (Serveur)\n");
+      exit(1);
+    }
+  }
+ 
+  if(connexion!=NULL){
+    mysql_close(connexion);
+    connexion=NULL;
+  }
+
+  exit(0);
+}
+
+
+int Login(MESSAGE *m){
+  int pos, ok=0, verif;
+  pos=estPresent(m->data2);
+
+  if(pos>0){
+    verif=verifieMotDePasse(pos, m->texte);
+  }
+
+  if(strcmp(m->data1, "1")==0){ // nouvel utilisateur
+      if(pos>0){// position trouvée dans le fichier
+        strcpy(m->texte, "Utilisateur déjà existant !");
+        ok=0;
+      }
+      else if(pos==0){
+        ajouteUtilisateur(m->data2, m->texte);
+        strcpy(m->texte, "Nouvel utilisateur créé : bienvenue !");
+        ok=1;
+      }
+      else{
+        strcpy(m->texte, "Erreur accès fichier");
+        ok=0;
+      }
+  }
+  else{// ancien utilisateur
+    if(pos==0){
+      strcpy(m->texte, "Utilisateur inconnu...!");
+      ok=0;
+    }
+    else if(pos>0){
+      if(verif==1){ // mot de passe ok
+      strcpy(m->texte, "Re-bonjour cher utilisateur!");
+      ok=1;
+      }
+      else if(verif==0){ // mot de passe incorrect
+        strcpy(m->texte, "Mot de passe incorrect...");
+        ok=0;
+      }
+      else{
+        strcpy(m->texte, "Erreur accès fichier");
+        ok=0;
+      }
+    }
+  }
+
+  if(ok)
+  {
+    for (int i = 0; i < 6; i++)
+    {
+      if (tab->connexions[i].pidFenetre == m->expediteur)
+      {
+        strcpy(tab->connexions[i].nom, m->data2);
+        break;
+      }
+    }
+  }
+
+  return ok;
+
+}
