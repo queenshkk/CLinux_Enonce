@@ -16,15 +16,19 @@ extern WindowClient *w;
 
 #include "protocole.h"
 
-int idQ, idShm;
+int idQ=-1, idShm=-1;
 #define TIME_OUT 120
 int timeOut = TIME_OUT;
-char * pShm;
+char * pShm=NULL;
 TAB_CONNEXIONS* tab;
+
+
 struct sigaction sa;
 static int log=0;
 
 void handlerSIGUSR1(int sig);
+void handlerSIGALARM(int sig);
+void handlerSIGUSR2(int sig);
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -36,8 +40,7 @@ WindowClient::WindowClient(QWidget *parent):QMainWindow(parent),ui(new Ui::Windo
     ::close(2);
     logoutOK();
 
-    MESSAGE m;
-
+    
 
     // Recuperation de l'identifiant de la file de messages
     fprintf(stderr,"(CLIENT %d) Recuperation de l'id de la file de messages\n",getpid());
@@ -52,9 +55,9 @@ WindowClient::WindowClient(QWidget *parent):QMainWindow(parent),ui(new Ui::Windo
 
 
     // Recuperation de l'identifiant de la mémoire partagée
-    /*fprintf(stderr,"(CLIENT %d) Recuperation de l'id de la mémoire partagée\n",getpid());
+    fprintf(stderr,"(CLIENT %d) Recuperation de l'id de la mémoire partagée\n",getpid());
 
-    idShm=shmget(CLE, sizeof(TAB_CONNEXIONS), 0);
+    idShm=shmget(CLE, 200, 0);
     if(idShm==-1){
       perror("Erreur shmget (Client)\n");
       exit(1);
@@ -63,13 +66,12 @@ WindowClient::WindowClient(QWidget *parent):QMainWindow(parent),ui(new Ui::Windo
     printf("idShm : %d\n", idShm);
 
     // Attachement à la mémoire partagée (la file)
-    tab=(TAB_CONNEXIONS*) shmat(idShm, NULL, 0);
-    if(tab==(void*)-1){
+    pShm=(char*) shmat(idShm, NULL, 0);
+    if(pShm==(char*)-1){
       perror("Erreur shmat (Client)\n");
       exit(1);
     }
     
- }*/
 
     // Armement des signaux
     sa.sa_handler=handlerSIGUSR1;
@@ -81,9 +83,28 @@ WindowClient::WindowClient(QWidget *parent):QMainWindow(parent),ui(new Ui::Windo
       exit(1);
     }
 
+    sa.sa_handler=handlerSIGALARM;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags=0;
+
+    if(sigaction(SIGALRM, &sa, nullptr)==-1){
+      perror("Erreur sigaction (Client)\n");
+      exit(1);
+    }
+
+    sa.sa_handler = handlerSIGUSR2;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
+
+    if(sigaction(SIGUSR2, &sa, NULL) == -1){
+      perror("sigaction SIGUSR2 (Client)");
+      exit(1);
+    }
+
     // Envoi d'une requete de connexion au serveur
     fprintf(stderr,"Envoi requête connect (Client)\n");
 
+    MESSAGE m;
     m.type=1;
     m.expediteur=getpid(); 
     m.requete=CONNECT;
@@ -428,7 +449,8 @@ void WindowClient::closeEvent(QCloseEvent *event)
 void WindowClient::on_pushButtonLogin_clicked()
 {
     // TO DO
-  MESSAGE m;
+
+    MESSAGE m;
 
   m.type=1;
   m.expediteur=getpid();
@@ -458,6 +480,11 @@ void WindowClient::on_pushButtonLogin_clicked()
 void WindowClient::on_pushButtonLogout_clicked()
 {
     // TO DO
+    alarm(0);
+    timeOut = TIME_OUT;
+    w->setTimeOut(timeOut);
+    alarm(1);
+
     if(!log) return;
 
 
@@ -482,24 +509,83 @@ void WindowClient::on_pushButtonLogout_clicked()
 void WindowClient::on_pushButtonEnvoyer_clicked()
 {
     // TO DO
+    alarm(0);
+    timeOut = TIME_OUT;
+    w->setTimeOut(timeOut);
+    alarm(1);
+
+    MESSAGE m;
+    m.type=1;
+    m.expediteur=getpid();
+    m.requete=SEND;
+      
+    strcpy(m.texte, getAEnvoyer()); 
+
+
+    fprintf(stderr,"Envoie requête send (Client)\n");
+
+    if(msgsnd(idQ, &m, sizeof(MESSAGE)-sizeof(long), 0)==-1){
+      perror("Erreur msgsnd (Client)\n");
+      exit(1);
+    }
 }
 
 void WindowClient::on_pushButtonConsulter_clicked()
 {
     // TO DO
+  alarm(0);
+  timeOut = TIME_OUT;
+  w->setTimeOut(timeOut);
+  alarm(1);
+
+  MESSAGE m;
+  m.type=1;
+  m.expediteur=getpid();
+  m.requete=CONSULT;
+
+  strcpy(m.data1, getNomRenseignements());
+
+
+  fprintf(stderr,"Envoie requête consult (Client)\n");
+
+  if(msgsnd(idQ, &m, sizeof(MESSAGE)-sizeof(long), 0)==-1){
+    perror("Erreur msgsnd (Client)\n");
+    exit(1);
+  }
 
 }
 
 void WindowClient::on_pushButtonModifier_clicked()
 {
   // TO DO
+
+  alarm(0);
+  timeOut = TIME_OUT;
+  w->setTimeOut(timeOut);
+  alarm(1);
+
   // Envoi d'une requete MODIF1 au serveur
   MESSAGE m;
   // ...
+  m.type=1;
+  m.expediteur=getpid();
+  m.requete=MODIF1;
+
+  fprintf(stderr,"Envoie requête modif1(Client)\n");
+
+  if(msgsnd(idQ, &m, sizeof(MESSAGE)-sizeof(long), 0)==-1){
+    perror("Erreur msgsnd (Client)\n");
+    exit(1);
+  }
+
 
   // Attente d'une reponse en provenance de Modification
   fprintf(stderr,"(CLIENT %d) Attente reponse MODIF1\n",getpid());
   // ...
+  if(msgrcv(idQ, &m, sizeof(MESSAGE)-sizeof(long), getpid(), 0)==-1){
+    perror("Erreur msgrcv(Client)\n");
+    exit(1);
+  }
 
   // Verification si la modification est possible
   if (strcmp(m.data1,"KO") == 0 && strcmp(m.data2,"KO") == 0 && strcmp(m.texte,"KO") == 0)
@@ -527,72 +613,207 @@ void WindowClient::on_pushButtonModifier_clicked()
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////
 void WindowClient::on_checkBox1_clicked(bool checked)
 {
+    alarm(0);
+    timeOut = TIME_OUT;
+    w->setTimeOut(timeOut);
+    alarm(1);
+
+    MESSAGE m;
+    memset(&m, 0, sizeof(MESSAGE));
+
+    const char *personne;
+    personne=getPersonneConnectee(1);
+
+    if(personne==NULL || strlen(personne)==0) return;
+
+    m.type=1;
+    m.expediteur=getpid();
+    strcpy(m.data1, personne);
+
+
     if (checked)
     {
         ui->checkBox1->setText("Accepté");
         // TO DO (etape 2)
+        m.requete=ACCEPT_USER;
     }
     else
     {
         ui->checkBox1->setText("Refusé");
         // TO DO (etape 2)
+        m.requete=REFUSE_USER;
+
     }
+
+    if(msgsnd(idQ, &m, sizeof(MESSAGE)-sizeof(long), 0)==-1){
+        perror("Erreur msgsnd (Client)\n");
+        exit(1);
+    }
+
 }
 
 void WindowClient::on_checkBox2_clicked(bool checked)
 {
+    alarm(0);
+    timeOut = TIME_OUT;
+    w->setTimeOut(timeOut);
+    alarm(1);
+
+    MESSAGE m;
+    memset(&m, 0, sizeof(MESSAGE));
+
+    const char *personne;
+    personne=getPersonneConnectee(2);
+
+    if(personne==NULL || strlen(personne)==0) return;
+    
+    m.type=1;
+    m.expediteur=getpid();
+    strcpy(m.data1, personne);
+
     if (checked)
     {
         ui->checkBox2->setText("Accepté");
         // TO DO (etape 2)
+        m.requete=ACCEPT_USER;
+
     }
     else
     {
         ui->checkBox2->setText("Refusé");
         // TO DO (etape 2)
+        m.requete=REFUSE_USER;
+
+    }
+
+    if(msgsnd(idQ, &m, sizeof(MESSAGE)-sizeof(long), 0)==-1){
+        perror("Erreur msgsnd (Client)\n");
+        exit(1);
     }
 }
 
 void WindowClient::on_checkBox3_clicked(bool checked)
 {
+    
+    alarm(0);
+    timeOut = TIME_OUT;
+    w->setTimeOut(timeOut);
+    alarm(1);
+
+    MESSAGE m;
+    memset(&m, 0, sizeof(MESSAGE));
+
+    const char *personne;
+    personne=getPersonneConnectee(3);
+
+    if(personne==NULL || strlen(personne)==0) return;
+    
+    m.type=1;
+    m.expediteur=getpid();
+    strcpy(m.data1, personne);
+
     if (checked)
     {
         ui->checkBox3->setText("Accepté");
         // TO DO (etape 2)
+        m.requete=ACCEPT_USER;
+
     }
     else
     {
         ui->checkBox3->setText("Refusé");
         // TO DO (etape 2)
+        m.requete=REFUSE_USER;
+
+    }
+
+    if(msgsnd(idQ, &m, sizeof(MESSAGE)-sizeof(long), 0)==-1){
+        perror("Erreur msgsnd (Client)\n");
+        exit(1);
     }
 }
 
 void WindowClient::on_checkBox4_clicked(bool checked)
 {
+    alarm(0);
+    timeOut = TIME_OUT;
+    w->setTimeOut(timeOut);
+    alarm(1);
+
+    MESSAGE m;
+    memset(&m, 0, sizeof(MESSAGE));
+
+    const char *personne;
+    personne=getPersonneConnectee(4);
+
+    if(personne==NULL || strlen(personne)==0) return;
+    
+    m.type=1;
+    m.expediteur=getpid();
+    strcpy(m.data1, personne);
+
     if (checked)
     {
         ui->checkBox4->setText("Accepté");
+        m.requete=ACCEPT_USER;
+
         // TO DO (etape 2)
     }
     else
     {
         ui->checkBox4->setText("Refusé");
         // TO DO (etape 2)
+        m.requete=REFUSE_USER;
+
+    }
+
+    if(msgsnd(idQ, &m, sizeof(MESSAGE)-sizeof(long), 0)==-1){
+        perror("Erreur msgsnd (Client)\n");
+        exit(1);
     }
 }
 
 void WindowClient::on_checkBox5_clicked(bool checked)
 {
+
+    alarm(0);
+    timeOut = TIME_OUT;
+    w->setTimeOut(timeOut);
+    alarm(1);
+
+    MESSAGE m;
+    memset(&m, 0, sizeof(MESSAGE));
+
+    const char *personne;
+    personne=getPersonneConnectee(5);
+
+    if(personne==NULL || strlen(personne)==0) return;
+    
+    m.type=1;
+    m.expediteur=getpid();
+    strcpy(m.data1, personne);
+
     if (checked)
     {
         ui->checkBox5->setText("Accepté");
+        
         // TO DO (etape 2)
+        m.requete=ACCEPT_USER;
+
     }
     else
     {
         ui->checkBox5->setText("Refusé");
         // TO DO (etape 2)
+        m.requete=REFUSE_USER;
+
     }
+
+    if(msgsnd(idQ, &m, sizeof(MESSAGE)-sizeof(long), 0)==-1){
+        perror("Erreur msgsnd (Client)\n");
+        exit(1);
+    }
+
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -602,8 +823,9 @@ void handlerSIGUSR1(int sig)
 {
     MESSAGE m;
     int i;
-    const char *nom;
-    int deja=0;
+    const char *nom, *myname;
+
+    int deja;
 
 
     // ...msgrcv(idQ,&m,...)
@@ -619,6 +841,9 @@ void handlerSIGUSR1(int sig)
                       w->dialogueMessage("Login...",m.texte);
                       // ...
                       log=1;
+                      timeOut = TIME_OUT;
+                      w->setTimeOut(timeOut);
+                      alarm(1);
                     }
                     else{
                       fprintf(stderr,"(CLIENT %d) Login KO\n",getpid());
@@ -631,6 +856,10 @@ void handlerSIGUSR1(int sig)
 
         case ADD_USER :
                     // TO DO
+                    deja=0;
+                    myname=w->getNom();
+                    if(myname!=NULL && strcmp(m.data1, myname) == 0) break;
+
 
                     for(i=1; i<=5; i++){
                       nom=w->getPersonneConnectee(i);
@@ -648,6 +877,8 @@ void handlerSIGUSR1(int sig)
                           break;
                         }
                       }
+                      w->ajouteMessage(m.data1, "est connecté !");
+
                     }
                    
 
@@ -659,23 +890,76 @@ void handlerSIGUSR1(int sig)
 
                     for(i=1; i<=5; i++){
                         nom=w->getPersonneConnectee(i);
-                        if(nom==NULL || strcmp(nom, m.data1)==0){
+                        if(nom!=NULL && strcmp(nom, m.data1)==0){
                           w->setPersonneConnectee(i, "");
                           break;
                         }
                       }
+                    w->ajouteMessage(m.data1, "est déconnecté !");
+
                     break;
 
         case SEND :
                     // TO DO
+
+                    w->ajouteMessage(m.data1, m.texte);
+               
                     break;
+
+
 
         case CONSULT :
                   // TO DO
+
+                  if(strcmp(m.data1, "OK") == 0)
+                  {
+                    w->setGsm(m.data2);
+                    w->setEmail(m.texte);
+                  }
+                  else
+                  {
+                    w->setGsm("Non trouvé");
+                    w->setEmail("Non trouvé");
+                  }
                   break;
+
+
     }
 
   }
 }
 
 
+void handlerSIGALARM(int sig){
+
+  timeOut--;
+  w->setTimeOut(timeOut);
+
+  
+
+  if(timeOut==0){
+    MESSAGE m;
+    m.type=1;
+    m.expediteur=getpid();
+    m.requete=LOGOUT;
+
+    if(msgsnd(idQ, &m, sizeof(MESSAGE)-sizeof(long), 0)==-1){
+      perror("Erreur msgsnd handlerSIGALARM (Client)\n");
+      exit(1);
+    }
+
+    w->logoutOK();
+
+    alarm(0);
+    timeOut = TIME_OUT;
+    w->setTimeOut(timeOut);
+    return;
+
+  }
+
+  alarm(1);
+}
+
+void handlerSIGUSR2(int sig){
+  w->setPublicite(pShm);
+}
