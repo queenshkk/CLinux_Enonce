@@ -63,9 +63,9 @@ Consultation.o : Consultation.cpp
 	echo Creation compilation Consultation.o 
 	g++ Consultation.cpp -o Consultation -I/usr/include/mysql -m64 -L/usr/lib64/mysql -lmysqlclient -lpthread -lz -lm -lrt -lssl -lcrypto -ldl
 
-Modification.o : Modification.cpp
+Modification.o : Modification.cpp FichierUtilisateur.o 
 	echo Creation compilation Modification.o 
-	g++ Modification.cpp -o Modification -I/usr/include/mysql -m64 -L/usr/lib64/mysql -lmysqlclient -lpthread -lz -lm -lrt -lssl -lcrypto -ldl
+	g++ Modification.cpp -o Modification FichierUtilisateur.o -I/usr/include/mysql -m64 -L/usr/lib64/mysql -lmysqlclient -lpthread -lz -lm -lrt -lssl -lcrypto -ldl
 
 FichierUtilisateur.o : FichierUtilisateur.cpp FichierUtilisateur.h
 	echo Creation compilation FichierUtilisateur.o 

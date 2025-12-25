@@ -538,6 +538,9 @@ void WindowClient::on_pushButtonConsulter_clicked()
   w->setTimeOut(timeOut);
   alarm(1);
 
+  setGsm("...en attente...");
+  setEmail("...en attente...");
+
   MESSAGE m;
   m.type=1;
   m.expediteur=getpid();
@@ -606,6 +609,20 @@ void WindowClient::on_pushButtonModifier_clicked()
 
   // Envoi des données modifiées au serveur
   // ...
+  MESSAGE m2;
+  m2.type=1;
+  m2.expediteur=getpid();
+  m2.requete=MODIF2;
+
+  strcpy(m2.data1, motDePasse);
+  strcpy(m2.data2, gsm);
+  strcpy(m2.texte, email);
+
+  if(msgsnd(idQ, &m2, sizeof(MESSAGE)-sizeof(long), 0)==-1){
+  perror("Erreur msgsnd MODIF2 (Client)");
+  exit(1);
+  }
+
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////

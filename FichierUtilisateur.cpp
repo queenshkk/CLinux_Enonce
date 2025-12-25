@@ -174,3 +174,117 @@ int listeUtilisateurs(UTILISATEUR *vecteur) // le vecteur doit etre suffisamment
   return cnt; // retourne le nb d'utilisateurs lus
 
 }
+
+int modifieMotDePasse(int pos, const char *newMdp)
+{
+  int fd, wr;
+  off_t off;
+  UTILISATEUR u;
+
+  if (pos <= 0) return -1;
+
+  fd=open(FICHIER_UTILISATEURS, O_RDWR);
+  if(fd==-1)
+  {
+    perror("open");
+    return -1;
+  }
+
+  off=(off_t)(pos-1)*(off_t)sizeof(UTILISATEUR);
+
+  if(lseek(fd, off, SEEK_SET)==(off_t)-1)
+  {
+    perror("lseek");
+    close(fd);
+    return -1;
+  }
+
+  if(read(fd, &u, sizeof(UTILISATEUR))!=sizeof(UTILISATEUR))
+  {
+    perror("read");
+    close(fd);
+    return -1;
+  }
+
+  // mise à jour du hash
+  u.hash=hash(newMdp);
+
+  // revenir au début de l'enregistrement pour réécrire dessus
+  if(lseek(fd, off, SEEK_SET)==(off_t)-1)
+  {
+    perror("lseek(2)");
+    close(fd);
+    return -1;
+  }
+
+  wr=write(fd, &u, sizeof(UTILISATEUR));
+  if (wr!=sizeof(UTILISATEUR))
+  {
+    perror("write");
+    close(fd);
+    return -1;
+  }
+
+  close(fd);
+  return 0; // OK
+}
+
+int supprimerUtilisateur(int pos)
+{
+  int fd, ft, rc, wr;
+  int cnt = 1;
+  UTILISATEUR u;
+
+  if(pos <= 0) return -1;
+
+  fd = open(FICHIER_UTILISATEURS, O_RDONLY);
+  if(fd == -1)
+  {
+    perror("Erreur open()");
+    return -1;
+  }
+
+  ft = open("utilisateurs.tmp", O_WRONLY | O_CREAT | O_TRUNC, 0666);
+  if(ft == -1)
+  {
+    perror("Erreur open() tmp");
+    close(fd);
+    return -1;
+  }
+
+  while((rc = read(fd, &u, sizeof(UTILISATEUR))) == sizeof(UTILISATEUR))
+  {
+    if(cnt != pos)
+    {
+      wr = write(ft, &u, sizeof(UTILISATEUR));
+      if(wr != sizeof(UTILISATEUR))
+      {
+        perror("Erreur write()");
+        close(fd);
+        close(ft);
+        return -1;
+      }
+    }
+    cnt++;
+  }
+
+  if(rc == -1)
+  {
+    perror("Erreur read()");
+    close(fd);
+    close(ft);
+    return -1;
+  }
+
+  close(fd);
+  close(ft);
+
+  // remplacer le fichier original
+  if(rename("utilisateurs.tmp", FICHIER_UTILISATEURS) == -1)
+  {
+    perror("Erreur rename()");
+    return -1;
+  }
+
+  return 1;
+}

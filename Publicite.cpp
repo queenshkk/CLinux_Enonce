@@ -15,14 +15,28 @@
 
 int idQ=-1, idShm=-1;
 int fd=-1, rd=-1;
-char *pShm=NULL;;
+char *pShm=NULL;
+
+void handlerSIGUSR1(int sig);
 
 int main()
 {
   // Armement des signaux
+  struct sigaction sa;
+  sa.sa_handler=handlerSIGUSR1;
+  sigemptyset(&sa.sa_mask);
+  sa.sa_flags=0;
+
+  if(sigaction(SIGUSR1, &sa, nullptr)==-1){
+    perror("Erreur sigaction (Client)\n");
+    exit(1);
+  }
+
+
 
   // Masquage de SIGINT
   sigset_t mask;
+  sigemptyset(&mask);
   sigaddset(&mask,SIGINT);
   sigprocmask(SIG_SETMASK,&mask,NULL);
 
@@ -96,3 +110,6 @@ int main()
   }
 }
 
+void handlerSIGUSR1(int sig){
+
+}
